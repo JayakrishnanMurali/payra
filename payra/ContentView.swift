@@ -8,14 +8,20 @@
 import SwiftUI
 
 struct ContentView: View {
+    @StateObject private var coreDataManager = CoreDataManager.shared
+    @State private var user: User?
+    
     var body: some View {
-        VStack {
-            Image(systemName: "globe")
-                .imageScale(.large)
-                .foregroundStyle(.tint)
-            Text("Hello, world!")
+        Group {
+            if let user = user, user.isOnboarded {
+                MainTabView()
+            } else {
+                OnboardingView()
+            }
         }
-        .padding()
+        .onAppear {
+            user = coreDataManager.fetchUser()
+        }
     }
 }
 
