@@ -1,0 +1,374 @@
+---
+description:
+globs:
+alwaysApply: false
+---
+# Core Data Patterns for Payra
+
+## Data Model Structure
+
+### 1. Entity Definitions
+Reference [PayraDataModel.xcdatamodeld](mdc:payra/PayraDataModel.xcdatamodeld) for the complete data model:
+
+#### Core Entities
+- **Transaction**: Financial records with amount, date, merchant, category
+- **Category**: Spending categories with budget limits and visual properties
+- **Goal**: Savings targets with progress tracking
+- **User**: User preferences and settings
+- **Reminder**: Notification scheduling for bills and alerts
+
+### 2. CoreDataManager Architecture
+Reference [CoreDataManager.swift](mdc:payra/CoreDataManager.swift) for all data operations:
+
+```swift
+class CoreDataManager: ObservableObject {
+    static let shared = CoreDataManager()
+    
+    lazy var persistentContainer: NSPersistentContainer = {
+        // Container setup with encryption
+    }()
+    
+    var context: NSManagedObjectContext {
+        persistentContainer.viewContext
+    }
+}
+```
+
+## CRUD Operations Patterns
+
+### 1. Create Operations
+```swift
+// Transaction creation
+func createTransaction(amount: Double, date: Date, merchant: String?, category: Category?, notes: String?, type: TransactionType, isRecurring: Bool = false, recurringFrequency: String? = nil) -> Transaction {
+    let transaction = Transaction(context: context)
+    transaction.id = UUID()
+    transaction.amount = amount
+    transaction.date = date
+    transaction.merchant = merchant
+    transaction.notes = notes
+    transaction.category = category
+    transaction.type = type.rawValue
+    transaction.isRecurring = isRecurring
+    transaction.recurringFrequency = recurringFrequency
+    
+    save()
+    return transaction
+}
+```
+
+### 2. Read Operations
+```swift
+// Fetch with predicates
+func fetchTransactions(for dateRange: DateRange = .thisMonth) -> [Transaction] {
+    let request: NSFetchRequest<Transaction> = Transaction.fetchRequest()
+    
+    let calendar = Calendar.current
+    let now = Date()
+    
+    switch dateRange {
+    case .thisMonth:
+        let startOfMonth = calendar.dateInterval(of: .month, for: now)?.start ?? now
+        request.predicate = NSPredicate(format: "date >= %@", startOfMonth as NSDate)
+    case .lastMonth:
+        // Last month logic
+    case .all:
+        break
+    }
+    
+    request.sortDescriptors = [NSSortDescriptor(keyPath: \Transaction.date, ascending: false)]
+    
+    do {
+        return try context.fetch(request)
+    } catch {
+        print("Error fetching transactions: \(error)")
+        return []
+    }
+}
+```
+
+### 3. Update Operations
+```swift
+// Update existing entity
+func updateTransaction(_ transaction: Transaction, amount: Double, merchant: String) {
+    transaction.amount = amount
+    transaction.merchant = merchant
+    transaction.updatedAt = Date()
+    
+    save()
+}
+```
+
+### 4. Delete Operations
+```swift
+// Delete entity
+func deleteTransaction(_ transaction: Transaction) {
+    context.delete(transaction)
+    save()
+}
+
+// Batch delete
+func deleteAllTransactions() {
+    let request: NSFetchRequest<NSFetchRequestResult> = Transaction.fetchRequest()
+    let deleteRequest = NSBatchDeleteRequest(fetchRequest: request)
+    
+    do {
+        try context.execute(deleteRequest)
+        save()
+    } catch {
+        print("Error deleting transactions: \(error)")
+    }
+}
+```
+
+## Query Patterns
+
+### 1. Date Range Queries
+```swift
+enum DateRange {
+    case thisMonth
+    case lastMonth
+    case all
+    case custom(start: Date, end: Date)
+}
+
+// Usage in predicates
+let startDate = calendar.dateInterval(of: .month, for: now)?.start ?? now
+let predicate = NSPredicate(format: "date >= %@", startDate as NSDate)
+```
+
+### 2. Category-based Queries
+```swift
+// Transactions by category
+func fetchTransactions(for category: Category) -> [Transaction] {
+    let request: NSFetchRequest<Transaction> = Transaction.fetchRequest()
+    request.predicate = NSPredicate(format: "category == %@", category)
+    request.sortDescriptors = [NSSortDescriptor(keyPath: \Transaction.date, ascending: false)]
+    
+    do {
+        return try context.fetch(request)
+    } catch {
+        print("Error fetching transactions: \(error)")
+        return []
+    }
+}
+```
+
+### 3. Aggregation Queries
+```swift
+// Sum amounts by category
+func getTotalSpendingByCategory() -> [(Category, Double)] {
+    let request: NSFetchRequest<NSFetchRequestResult> = Transaction.fetchRequest()
+    request.resultType = .dictionaryResultType
+    
+    let expression = NSExpression(forKeyPath: "amount")
+    let sumExpression = NSExpression(forFunction: "sum:", arguments: [expression])
+    
+    let description = NSExpressionDescription()
+    description.name = "totalAmount"
+    description.expression = sumExpression
+    description.expressionResultType = .doubleAttributeType
+    
+    request.propertiesToFetch = ["category", description]
+    request.propertiesToGroupBy = ["category"]
+    request.predicate = NSPredicate(format: "type == %@", TransactionType.expense.rawValue)
+    
+    do {
+        let results = try context.fetch(request) as? [[String: Any]] ?? []
+        return results.compactMap { result in
+            guard let category = result["category"] as? Category,
+                  let total = result["totalAmount"] as? Double else { return nil }
+            return (category, total)
+        }
+    } catch {
+        print("Error aggregating transactions: \(error)")
+        return []
+    }
+}
+```
+
+## Performance Optimization
+
+### 1. Batch Operations
+```swift
+// Batch insert for CSV import
+func batchCreateTransactions(_ transactions: [TransactionData]) {
+    let batchSize = 100
+    var currentBatch: [TransactionData] = []
+    
+    for transaction in transactions {
+        currentBatch.append(transaction)
+        
+        if currentBatch.count >= batchSize {
+            processBatch(currentBatch)
+            currentBatch.removeAll()
+        }
+    }
+    
+    // Process remaining items
+    if !currentBatch.isEmpty {
+        processBatch(currentBatch)
+    }
+}
+
+private func processBatch(_ batch: [TransactionData]) {
+    for data in batch {
+        createTransaction(
+            amount: data.amount,
+            date: data.date,
+            merchant: data.merchant,
+            category: data.category,
+            notes: data.notes,
+            type: data.type
+        )
+    }
+    save()
+}
+```
+
+### 2. Background Context Usage
+```swift
+// Heavy operations on background context
+func importTransactionsInBackground(_ transactions: [TransactionData], completion: @escaping (Bool) -> Void) {
+    persistentContainer.performBackgroundTask { backgroundContext in
+        var success = true
+        
+        for data in transactions {
+            let transaction = Transaction(context: backgroundContext)
+            // Set properties
+        }
+        
+        do {
+            try backgroundContext.save()
+        } catch {
+            print("Error saving background context: \(error)")
+            success = false
+        }
+        
+        DispatchQueue.main.async {
+            completion(success)
+        }
+    }
+}
+```
+
+### 3. Fetch Request Optimization
+```swift
+// Optimize fetch requests
+func fetchTransactionsOptimized() -> [Transaction] {
+    let request: NSFetchRequest<Transaction> = Transaction.fetchRequest()
+    
+    // Set fetch limit for large datasets
+    request.fetchLimit = 1000
+    
+    // Only fetch needed properties
+    request.propertiesToFetch = ["id", "amount", "date", "merchant", "type"]
+    
+    // Use batch size
+    request.fetchBatchSize = 50
+    
+    do {
+        return try context.fetch(request)
+    } catch {
+        print("Error fetching transactions: \(error)")
+        return []
+    }
+}
+```
+
+## Error Handling
+
+### 1. Save Context Error Handling
+```swift
+func save() {
+    if context.hasChanges {
+        do {
+            try context.save()
+        } catch {
+            print("Error saving context: \(error)")
+            // Handle specific Core Data errors
+            if let nsError = error as NSError? {
+                switch nsError.code {
+                case NSManagedObjectConstraintMergeError:
+                    // Handle constraint violation
+                    break
+                case NSManagedObjectValidationError:
+                    // Handle validation error
+                    break
+                default:
+                    break
+                }
+            }
+        }
+    }
+}
+```
+
+### 2. Validation
+```swift
+// Validate before saving
+func validateTransaction(_ transaction: Transaction) -> Bool {
+    guard transaction.amount > 0 else { return false }
+    guard !transaction.merchant?.isEmpty ?? false else { return false }
+    return true
+}
+```
+
+## Data Migration
+
+### 1. Lightweight Migration
+```swift
+lazy var persistentContainer: NSPersistentContainer = {
+    let container = NSPersistentContainer(name: "PayraDataModel")
+    
+    // Enable lightweight migration
+    let description = container.persistentStoreDescriptions.first
+    description?.setOption(true as NSNumber, forKey: NSMigratePersistentStoresAutomaticallyOption)
+    description?.setOption(true as NSNumber, forKey: NSInferMappingModelAutomaticallyOption)
+    
+    container.loadPersistentStores { _, error in
+        if let error = error {
+            fatalError("Core Data store failed to load: \(error.localizedDescription)")
+        }
+    }
+    
+    return container
+}()
+```
+
+## Testing Patterns
+
+### 1. In-Memory Store for Testing
+```swift
+class TestCoreDataManager: CoreDataManager {
+    override lazy var persistentContainer: NSPersistentContainer = {
+        let container = NSPersistentContainer(name: "PayraDataModel")
+        
+        let description = NSPersistentStoreDescription()
+        description.type = NSInMemoryStoreType
+        container.persistentStoreDescriptions = [description]
+        
+        container.loadPersistentStores { _, error in
+            if let error = error {
+                fatalError("Test Core Data store failed to load: \(error.localizedDescription)")
+            }
+        }
+        
+        return container
+    }()
+}
+```
+
+### 2. Mock Data Creation
+```swift
+extension CoreDataManager {
+    func createMockData() {
+        // Create test categories
+        let food = createCategory(name: "Food", budgetLimit: 500)
+        let transport = createCategory(name: "Transport", budgetLimit: 200)
+        
+        // Create test transactions
+        createTransaction(amount: 25.50, date: Date(), merchant: "Grocery Store", category: food, notes: "Weekly groceries", type: .expense)
+        createTransaction(amount: 15.00, date: Date(), merchant: "Gas Station", category: transport, notes: "Fuel", type: .expense)
+    }
+}
+```

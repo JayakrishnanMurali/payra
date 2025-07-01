@@ -1,0 +1,457 @@
+---
+description: 
+globs: 
+alwaysApply: false
+---
+# Security & Privacy Guidelines for Payra
+
+## Data Protection Principles
+
+### 1. Local Data Storage Only
+- **No Cloud Sync**: All data is stored locally on device (MVP requirement)
+- **No External APIs**: No transmission of financial data to external servers
+- **Offline-First**: App functions completely offline
+
+### 2. Biometric Authentication
+Reference [SettingsView.swift](mdc:payra/SettingsView.swift) for biometric implementation:
+
+```swift
+import LocalAuthentication
+
+class BiometricAuthManager: ObservableObject {
+    @Published var isBiometricEnabled = false
+    @Published var biometricType: LABiometryType = .none
+    
+    func checkBiometricAvailability() {
+        let context = LAContext()
+        var error: NSError?
+        
+        if context.canEvaluatePolicy(.deviceOwnerAuthenticationWithBiometrics, error: &error) {
+            biometricType = context.biometryType
+        } else {
+            biometricType = .none
+        }
+    }
+    
+    func authenticateUser(completion: @escaping (Bool) -> Void) {
+        let context = LAContext()
+        let reason = "Authenticate to access your financial data"
+        
+        context.evaluatePolicy(.deviceOwnerAuthenticationWithBiometrics, localizedReason: reason) { success, error in
+            DispatchQueue.main.async {
+                completion(success)
+            }
+        }
+    }
+}
+```
+
+### 3. Data Encryption
+```swift
+import CryptoKit
+
+class DataEncryptionManager {
+    static let shared = DataEncryptionManager()
+    
+    private let keychain = KeychainWrapper.standard
+    
+    func encryptSensitiveData(_ data: Data) -> Data? {
+        guard let key = getEncryptionKey() else { return nil }
+        
+        do {
+            let sealedBox = try AES.GCM.seal(data, using: key)
+            return sealedBox.combined
+        } catch {
+            print("Encryption error: \(error)")
+            return nil
+        }
+    }
+    
+    func decryptSensitiveData(_ encryptedData: Data) -> Data? {
+        guard let key = getEncryptionKey() else { return nil }
+        
+        do {
+            let sealedBox = try AES.GCM.SealedBox(combined: encryptedData)
+            return try AES.GCM.open(sealedBox, using: key)
+        } catch {
+            print("Decryption error: \(error)")
+            return nil
+        }
+    }
+    
+    private func getEncryptionKey() -> SymmetricKey? {
+        // Generate or retrieve encryption key from keychain
+        if let keyData = keychain.data(forKey: "encryption_key") {
+            return SymmetricKey(data: keyData)
+        } else {
+            let key = SymmetricKey(size: .bits256)
+            keychain.set(key.withUnsafeBytes { Data($0) }, forKey: "encryption_key")
+            return key
+        }
+    }
+}
+```
+
+## Core Data Security
+
+### 1. Encrypted Core Data Store
+```swift
+// In CoreDataManager
+lazy var persistentContainer: NSPersistentContainer = {
+    let container = NSPersistentContainer(name: "PayraDataModel")
+    
+    // Enable encryption for the persistent store
+    let description = container.persistentStoreDescriptions.first
+    description?.setOption(true as NSNumber, forKey: NSPersistentStoreFileProtectionKey)
+    
+    // Use SQLite encryption if available
+    if let encryptionKey = DataEncryptionManager.shared.getEncryptionKey() {
+        description?.setOption(encryptionKey.withUnsafeBytes { Data($0) }, forKey: NSPersistentStoreEncryptionKey)
+    }
+    
+    container.loadPersistentStores { _, error in
+        if let error = error {
+            fatalError("Core Data store failed to load: \(error.localizedDescription)")
+        }
+    }
+    
+    return container
+}()
+```
+
+### 2. Sensitive Data Handling
+```swift
+// Extension for sensitive data properties
+extension Transaction {
+    var encryptedNotes: String? {
+        get {
+            guard let encryptedData = notesData else { return nil }
+            guard let decryptedData = DataEncryptionManager.shared.decryptSensitiveData(encryptedData) else { return nil }
+            return String(data: decryptedData, encoding: .utf8)
+        }
+        set {
+            if let newValue = newValue,
+               let data = newValue.data(using: .utf8),
+               let encryptedData = DataEncryptionManager.shared.encryptSensitiveData(data) {
+                notesData = encryptedData
+            } else {
+                notesData = nil
+            }
+        }
+    }
+}
+```
+
+## Input Validation & Sanitization
+
+### 1. Transaction Input Validation
+```swift
+struct TransactionValidator {
+    static func validateAmount(_ amount: String) -> ValidationResult {
+        guard !amount.isEmpty else {
+            return .failure("Amount cannot be empty")
+        }
+        
+        guard let doubleAmount = Double(amount) else {
+            return .failure("Invalid amount format")
+        }
+        
+        guard doubleAmount > 0 else {
+            return .failure("Amount must be greater than 0")
+        }
+        
+        guard doubleAmount <= 999999.99 else {
+            return .failure("Amount too large")
+        }
+        
+        return .success(doubleAmount)
+    }
+    
+    static func validateMerchant(_ merchant: String) -> ValidationResult {
+        let trimmed = merchant.trimmingCharacters(in: .whitespacesAndNewlines)
+        
+        guard !trimmed.isEmpty else {
+            return .failure("Merchant name cannot be empty")
+        }
+        
+        guard trimmed.count <= 100 else {
+            return .failure("Merchant name too long")
+        }
+        
+        // Check for potentially malicious content
+        let allowedCharacters = CharacterSet.letters.union(.whitespaces).union(.decimalDigits).union(CharacterSet(charactersIn: "&'-.,"))
+        guard trimmed.rangeOfCharacter(from: allowedCharacters.inverted) == nil else {
+            return .failure("Merchant name contains invalid characters")
+        }
+        
+        return .success(trimmed)
+    }
+}
+
+enum ValidationResult {
+    case success(Any)
+    case failure(String)
+}
+```
+
+### 2. CSV Import Security
+```swift
+class SecureCSVParser {
+    static func validateCSVFile(_ url: URL) -> Bool {
+        // Check file size (max 10MB)
+        guard let fileSize = try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize,
+              fileSize <= 10 * 1024 * 1024 else {
+            return false
+        }
+        
+        // Check file extension
+        guard url.pathExtension.lowercased() == "csv" else {
+            return false
+        }
+        
+        // Validate file content
+        guard let content = try? String(contentsOf: url) else {
+            return false
+        }
+        
+        // Check for reasonable line count (max 10,000 rows)
+        let lines = content.components(separatedBy: .newlines)
+        guard lines.count <= 10000 else {
+            return false
+        }
+        
+        return true
+    }
+    
+    static func sanitizeCSVContent(_ content: String) -> String {
+        // Remove any potential script tags or malicious content
+        var sanitized = content
+        
+        // Remove HTML tags
+        sanitized = sanitized.replacingOccurrences(of: "<[^>]+>", with: "", options: .regularExpression)
+        
+        // Remove control characters
+        sanitized = sanitized.components(separatedBy: .controlCharacters).joined()
+        
+        return sanitized
+    }
+}
+```
+
+## Privacy Protection
+
+### 1. Data Minimization
+```swift
+// Only collect necessary data
+struct MinimalTransactionData {
+    let amount: Double
+    let date: Date
+    let merchant: String
+    let categoryId: UUID?
+    
+    // Don't store unnecessary personal information
+    // No names, addresses, or other PII
+}
+```
+
+### 2. Data Retention
+```swift
+class DataRetentionManager {
+    static let shared = DataRetentionManager()
+    
+    func cleanupOldData() {
+        let calendar = Calendar.current
+        let cutoffDate = calendar.date(byAdding: .year, value: -7, to: Date()) ?? Date()
+        
+        let request: NSFetchRequest<Transaction> = Transaction.fetchRequest()
+        request.predicate = NSPredicate(format: "date < %@", cutoffDate as NSDate)
+        
+        do {
+            let oldTransactions = try CoreDataManager.shared.context.fetch(request)
+            for transaction in oldTransactions {
+                CoreDataManager.shared.context.delete(transaction)
+            }
+            CoreDataManager.shared.save()
+        } catch {
+            print("Error cleaning up old data: \(error)")
+        }
+    }
+}
+```
+
+### 3. Privacy Settings
+```swift
+struct PrivacySettings {
+    @AppStorage("analytics_enabled") var analyticsEnabled = false
+    @AppStorage("crash_reporting_enabled") var crashReportingEnabled = false
+    @AppStorage("data_retention_years") var dataRetentionYears = 7
+    
+    // No telemetry or analytics in MVP
+    // All data stays on device
+}
+```
+
+## Security Best Practices
+
+### 1. Secure Key Storage
+```swift
+import Security
+
+class SecureKeyStorage {
+    static func storeKey(_ key: Data, withIdentifier identifier: String) -> Bool {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrAccount as String: identifier,
+            kSecValueData as String: key,
+            kSecAttrAccessible as String: kSecAttrAccessibleWhenUnlockedThisDeviceOnly
+        ]
+        
+        let status = SecItemAdd(query as CFDictionary, nil)
+        return status == errSecSuccess
+    }
+    
+    static func retrieveKey(withIdentifier identifier: String) -> Data? {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrAccount as String: identifier,
+            kSecReturnData as String: true,
+            kSecMatchLimit as String: kSecMatchLimitOne
+        ]
+        
+        var result: AnyObject?
+        let status = SecItemCopyMatching(query as CFDictionary, &result)
+        
+        return status == errSecSuccess ? result as? Data : nil
+    }
+}
+```
+
+### 2. App Transport Security
+```swift
+// In Info.plist (if any network calls are added later)
+/*
+<key>NSAppTransportSecurity</key>
+<dict>
+    <key>NSAllowsArbitraryLoads</key>
+    <false/>
+    <key>NSExceptionDomains</key>
+    <dict>
+        <!-- Add specific domains if needed -->
+    </dict>
+</dict>
+*/
+```
+
+### 3. Secure Random Generation
+```swift
+import CryptoKit
+
+class SecureRandomGenerator {
+    static func generateSecureUUID() -> UUID {
+        var bytes = [UInt8](mdc:repeating: 0, count: 16)
+        _ = SecRandomCopyBytes(kSecRandomDefault, bytes.count, &bytes)
+        
+        return UUID(uuid: UUID(uuidString: "00000000-0000-0000-0000-000000000000")!.uuid)
+    }
+    
+    static func generateSecureToken() -> String {
+        var bytes = [UInt8](mdc:repeating: 0, count: 32)
+        _ = SecRandomCopyBytes(kSecRandomDefault, bytes.count, &bytes)
+        
+        return Data(bytes).base64EncodedString()
+    }
+}
+```
+
+## Audit & Compliance
+
+### 1. Security Logging
+```swift
+class SecurityLogger {
+    static func logSecurityEvent(_ event: String, level: SecurityLevel = .info) {
+        let timestamp = Date()
+        let logEntry = "\(timestamp): [\(level.rawValue)] \(event)"
+        
+        // Store in secure log file
+        writeToSecureLog(logEntry)
+    }
+    
+    enum SecurityLevel: String {
+        case info = "INFO"
+        case warning = "WARNING"
+        case error = "ERROR"
+    }
+    
+    private static func writeToSecureLog(_ entry: String) {
+        // Write to encrypted log file
+        // Implement secure logging mechanism
+    }
+}
+```
+
+### 2. Data Export Security
+```swift
+class SecureDataExporter {
+    static func exportTransactions(completion: @escaping (URL?) -> Void) {
+        // Export data in encrypted format
+        let transactions = CoreDataManager.shared.fetchTransactions(for: .all)
+        
+        // Create encrypted export file
+        let exportData = createEncryptedExport(transactions)
+        
+        // Save to temporary file
+        let tempURL = FileManager.default.temporaryDirectory.appendingPathComponent("payra_export_\(Date().timeIntervalSince1970).enc")
+        
+        do {
+            try exportData.write(to: tempURL)
+            completion(tempURL)
+        } catch {
+            print("Export error: \(error)")
+            completion(nil)
+        }
+    }
+    
+    private static func createEncryptedExport(_ transactions: [Transaction]) -> Data {
+        // Create encrypted export format
+        // Implementation depends on export format requirements
+        return Data()
+    }
+}
+```
+
+## Testing Security
+
+### 1. Security Testing Checklist
+```swift
+class SecurityTestSuite {
+    static func runSecurityTests() {
+        // Test biometric authentication
+        testBiometricAuth()
+        
+        // Test data encryption
+        testDataEncryption()
+        
+        // Test input validation
+        testInputValidation()
+        
+        // Test file import security
+        testFileImportSecurity()
+    }
+    
+    private static func testBiometricAuth() {
+        // Test biometric authentication flow
+    }
+    
+    private static func testDataEncryption() {
+        // Test encryption/decryption of sensitive data
+    }
+    
+    private static func testInputValidation() {
+        // Test various input validation scenarios
+    }
+    
+    private static func testFileImportSecurity() {
+        // Test CSV import security measures
+    }
+}
+```

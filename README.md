@@ -1,6 +1,95 @@
-# Payra - iOS Personal Finance Tracker
+# Payra - Personal Finance App
 
-Payra is a comprehensive personal finance tracking application built with SwiftUI and Core Data, designed to help users manage their expenses, income, budgets, and financial goals.
+A modern iOS app for personal finance management built with SwiftUI and Core Data.
+
+## Project Structure
+
+The project follows a clean architecture pattern with the following folder structure:
+
+```
+payra/
+├── App/                    # Core app files
+│   ├── payraApp.swift     # App entry point
+│   └── ContentView.swift  # Root content view
+├── Views/                  # All UI views organized by feature
+│   ├── Dashboard/         # Dashboard-related views
+│   │   ├── DashboardView.swift
+│   │   └── MainTabView.swift
+│   ├── Transactions/      # Transaction management views
+│   │   ├── TransactionsView.swift
+│   │   └── AddTransactionView.swift
+│   ├── Goals/            # Financial goals views
+│   │   ├── GoalsView.swift
+│   │   └── AddGoalView.swift
+│   ├── Settings/         # App settings and configuration
+│   │   ├── SettingsView.swift
+│   │   └── AddCategoryView.swift
+│   └── Onboarding/       # User onboarding flow
+│       └── OnboardingView.swift
+├── Models/               # Data models and Core Data
+│   └── PayraDataModel.xcdatamodeld/
+├── Managers/             # Business logic and services
+│   ├── CoreDataManager.swift
+│   ├── CSVImportManager.swift
+│   └── NotificationManager.swift
+├── Design/              # Design system and assets
+│   ├── DesignSystem.swift
+│   ├── Assets.xcassets/
+│   └── Preview Content/
+└── Utils/               # Utilities and helpers
+```
+
+## Architecture Guidelines
+
+### Views
+
+- **Feature-based organization**: Views are grouped by feature (Dashboard, Transactions, Goals, etc.)
+- **Single responsibility**: Each view should have a clear, single purpose
+- **SwiftUI best practices**: Use proper state management and view composition
+
+### Managers
+
+- **Business logic separation**: All business logic is contained in manager classes
+- **Dependency injection**: Managers can be injected into views as needed
+- **Error handling**: Proper error handling and user feedback
+
+### Models
+
+- **Core Data integration**: All data models are defined in the Core Data model
+- **Type safety**: Use proper Swift types and Core Data relationships
+
+### Design
+
+- **Consistent styling**: Use the DesignSystem for consistent UI components
+- **Asset management**: All images and colors are managed through asset catalogs
+
+## Development Guidelines
+
+1. **File naming**: Use descriptive names that clearly indicate the file's purpose
+2. **Code organization**: Keep related functionality together
+3. **Documentation**: Add comments for complex business logic
+4. **Testing**: Write unit tests for managers and integration tests for views
+
+## Getting Started
+
+1. Open `payra.xcodeproj` in Xcode
+2. Build and run the project
+3. The app will start with the onboarding flow for new users
+
+## Features
+
+- **Dashboard**: Overview of financial status and recent activity
+- **Transactions**: Add, edit, and categorize financial transactions
+- **Goals**: Set and track financial goals
+- **Settings**: Configure categories, notifications, and app preferences
+- **CSV Import**: Import transaction data from CSV files
+- **Notifications**: Smart reminders for bills and goals
+
+## Requirements
+
+- iOS 18.1+
+- Xcode 16.1+
+- Swift 6.0+
 
 ## Features
 

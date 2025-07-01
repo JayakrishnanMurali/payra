@@ -185,18 +185,6 @@ class CoreDataManager: ObservableObject {
 }
 
 // MARK: - Enums
-enum TransactionType: String, CaseIterable {
-    case expense = "expense"
-    case income = "income"
-    
-    var displayName: String {
-        switch self {
-        case .expense: return "Expense"
-        case .income: return "Income"
-        }
-    }
-}
-
 enum DateRange {
     case thisMonth
     case lastMonth

@@ -1,0 +1,109 @@
+---
+description: 
+globs: 
+alwaysApply: false
+---
+# Payra iOS App Architecture Guide
+
+## Project Overview
+Payra is a comprehensive personal finance tracking iOS app built with SwiftUI and Core Data, following a Coinbase-inspired design system. The app focuses on expense tracking, budget management, and financial goal setting.
+
+## Core Architecture Principles
+
+### 1. SwiftUI + Core Data Stack
+- **UI Framework**: SwiftUI for modern declarative UI
+- **Data Persistence**: Core Data with encryption support
+- **State Management**: @StateObject, @ObservedObject, and @EnvironmentObject
+- **Navigation**: TabView-based navigation with sheet presentations
+
+### 2. Design System
+Reference [DesignSystem.swift](mdc:payra/DesignSystem.swift) for:
+- Color palette (payraPrimary, payraAccent, payraBackground, etc.)
+- Typography (payraHeadlineLarge, payraBodyMedium, etc.)
+- Spacing and layout constants
+- Reusable components (PayraButton, PayraCard, PayraSearchBar)
+
+### 3. Data Layer Architecture
+- **CoreDataManager**: Singleton pattern for data operations
+- **Entities**: Transaction, Category, Goal, User, Reminder
+- **CRUD Operations**: Centralized in CoreDataManager
+- **Encryption**: CryptoKit integration for sensitive data
+
+## File Structure & Responsibilities
+
+### App Entry Point
+- [payraApp.swift](mdc:payra/payraApp.swift): Main app entry with Core Data setup
+- [ContentView.swift](mdc:payra/ContentView.swift): Root view with onboarding logic
+
+### Core Data Management
+- [CoreDataManager.swift](mdc:payra/CoreDataManager.swift): Central data operations and CRUD
+- [PayraDataModel.xcdatamodeld](mdc:payra/PayraDataModel.xcdatamodeld): Data model definitions
+
+### Feature Views
+- **Onboarding**: [OnboardingView.swift](mdc:payra/OnboardingView.swift)
+- **Main Navigation**: [MainTabView.swift](mdc:payra/MainTabView.swift)
+- **Dashboard**: [DashboardView.swift](mdc:payra/DashboardView.swift)
+- **Transactions**: [TransactionsView.swift](mdc:payra/TransactionsView.swift), [AddTransactionView.swift](mdc:payra/AddTransactionView.swift)
+- **Goals**: [GoalsView.swift](mdc:payra/GoalsView.swift), [AddGoalView.swift](mdc:payra/AddGoalView.swift)
+- **Settings**: [SettingsView.swift](mdc:payra/SettingsView.swift)
+- **Categories**: [AddCategoryView.swift](mdc:payra/AddCategoryView.swift)
+
+### Utility Managers
+- [CSVImportManager.swift](mdc:payra/CSVImportManager.swift): Bank statement import functionality
+- [NotificationManager.swift](mdc:payra/NotificationManager.swift): Local notifications and reminders
+
+## Development Guidelines
+
+### 1. State Management
+- Use @StateObject for view models that need to persist
+- Use @ObservedObject for data passed from parent views
+- Use @EnvironmentObject for app-wide state (CoreDataManager)
+
+### 2. Data Operations
+- Always use CoreDataManager.shared for data operations
+- Implement proper error handling for Core Data operations
+- Use background contexts for heavy operations
+
+### 3. UI/UX Standards
+- Follow the established design system in DesignSystem.swift
+- Use PayraButton, PayraCard, and PayraSearchBar components
+- Maintain consistent spacing using .payraSpacing constants
+- Apply payraCardShadow() for card-like elements
+
+### 4. Performance Considerations
+- Use lazy loading for large lists
+- Implement proper Core Data fetch request optimization
+- Use background processing for CSV imports
+- Cache frequently accessed data
+
+### 5. Security Best Practices
+- Implement biometric authentication
+- Encrypt sensitive data using CryptoKit
+- Store data locally only (no cloud sync in MVP)
+- Validate all user inputs
+
+## MVP Feature Priorities
+
+### Phase 1: Core Functionality ✅
+- Transaction CRUD operations
+- Basic dashboard with spending overview
+- Category management
+- Simple goal tracking
+
+### Phase 2: Enhanced Features
+- CSV import with smart categorization
+- Recurring transaction support
+- Budget alerts and notifications
+- Advanced reporting and charts
+
+### Phase 3: Polish & Security
+- Biometric authentication
+- Data export functionality
+- Performance optimization
+- Advanced goal features
+
+## Testing Strategy
+- Unit tests for CoreDataManager operations
+- UI tests for critical user flows
+- Performance testing for large datasets
+- Security testing for data encryption

@@ -1,0 +1,567 @@
+---
+description:
+globs:
+alwaysApply: false
+---
+# Feature Implementation Guide for Payra
+
+## Transaction Management
+
+### 1. Transaction CRUD Implementation
+Reference [AddTransactionView.swift](mdc:payra/AddTransactionView.swift) and [TransactionsView.swift](mdc:payra/TransactionsView.swift) for patterns:
+
+#### Add Transaction Flow
+```swift
+struct AddTransactionView: View {
+    @Environment(\.dismiss) private var dismiss
+    @Environment(\.managedObjectContext) private var context
+    
+    @State private var amount = ""
+    @State private var merchant = ""
+    @State private var selectedCategory: Category?
+    @State private var notes = ""
+    @State private var transactionType: TransactionType = .expense
+    @State private var isRecurring = false
+    @State private var recurringFrequency = "Monthly"
+    
+    private let coreDataManager = CoreDataManager.shared
+    
+    var body: some View {
+        NavigationView {
+            Form {
+                Section("Transaction Details") {
+                    TextField("Amount", text: $amount)
+                        .keyboardType(.decimalPad)
+                    
+                    TextField("Merchant", text: $merchant)
+                    
+                    Picker("Type", selection: $transactionType) {
+                        ForEach(TransactionType.allCases, id: \.self) { type in
+                            Text(type.displayName).tag(type)
+                        }
+                    }
+                    .pickerStyle(SegmentedPickerStyle())
+                    
+                    CategoryPicker(selectedCategory: $selectedCategory)
+                }
+                
+                Section("Additional Details") {
+                    TextField("Notes", text: $notes)
+                    
+                    Toggle("Recurring Transaction", isOn: $isRecurring)
+                    
+                    if isRecurring {
+                        Picker("Frequency", selection: $recurringFrequency) {
+                            Text("Weekly").tag("Weekly")
+                            Text("Monthly").tag("Monthly")
+                            Text("Yearly").tag("Yearly")
+                        }
+                    }
+                }
+            }
+            .navigationTitle("Add Transaction")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .navigationBarLeading) {
+                    Button("Cancel") {
+                        dismiss()
+                    }
+                }
+                
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Button("Save") {
+                        saveTransaction()
+                    }
+                    .disabled(!isFormValid)
+                }
+            }
+        }
+    }
+    
+    private var isFormValid: Bool {
+        !amount.isEmpty && Double(amount) != nil && !merchant.isEmpty
+    }
+    
+    private func saveTransaction() {
+        guard let amountValue = Double(amount) else { return }
+        
+        let transaction = coreDataManager.createTransaction(
+            amount: amountValue,
+            date: Date(),
+            merchant: merchant,
+            category: selectedCategory,
+            notes: notes.isEmpty ? nil : notes,
+            type: transactionType,
+            isRecurring: isRecurring,
+            recurringFrequency: isRecurring ? recurringFrequency : nil
+        )
+        
+        dismiss()
+    }
+}
+```
+
+#### Transaction List with Search
+```swift
+struct TransactionsView: View {
+    @StateObject private var viewModel = TransactionsViewModel()
+    @State private var searchText = ""
+    @State private var showingAddSheet = false
+    
+    var body: some View {
+        NavigationView {
+            VStack {
+                PayraSearchBar(text: $searchText, placeholder: "Search transactions...")
+                    .padding(.horizontal)
+                
+                List {
+                    ForEach(filteredTransactions) { transaction in
+                        TransactionRowView(transaction: transaction)
+                            .swipeActions(edge: .trailing) {
+                                Button("Delete", role: .destructive) {
+                                    viewModel.deleteTransaction(transaction)
+                                }
+                            }
+                    }
+                }
+                .listStyle(PlainListStyle())
+            }
+            .navigationTitle("Transactions")
+            .toolbar {
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Button {
+                        showingAddSheet = true
+                    } label: {
+                        Image(systemName: "plus")
+                    }
+                }
+            }
+            .sheet(isPresented: $showingAddSheet) {
+                AddTransactionView()
+            }
+        }
+        .onAppear {
+            viewModel.loadTransactions()
+        }
+    }
+    
+    private var filteredTransactions: [Transaction] {
+        if searchText.isEmpty {
+            return viewModel.transactions
+        } else {
+            return viewModel.transactions.filter { transaction in
+                transaction.merchant?.localizedCaseInsensitiveContains(searchText) == true ||
+                transaction.notes?.localizedCaseInsensitiveContains(searchText) == true
+            }
+        }
+    }
+}
+```
+
+### 2. Recurring Transactions
+```swift
+// In CoreDataManager
+func createRecurringTransaction(amount: Double, merchant: String, category: Category?, frequency: String) {
+    let transaction = createTransaction(
+        amount: amount,
+        date: Date(),
+        merchant: merchant,
+        category: category,
+        type: .expense,
+        isRecurring: true,
+        recurringFrequency: frequency
+    )
+    
+    // Schedule next occurrence
+    scheduleNextRecurringTransaction(transaction)
+}
+
+private func scheduleNextRecurringTransaction(_ transaction: Transaction) {
+    guard let frequency = transaction.recurringFrequency else { return }
+    
+    let nextDate: Date
+    switch frequency {
+    case "Weekly":
+        nextDate = Calendar.current.date(byAdding: .weekOfYear, value: 1, to: transaction.date) ?? Date()
+    case "Monthly":
+        nextDate = Calendar.current.date(byAdding: .month, value: 1, to: transaction.date) ?? Date()
+    case "Yearly":
+        nextDate = Calendar.current.date(byAdding: .year, value: 1, to: transaction.date) ?? Date()
+    default:
+        return
+    }
+    
+    // Create reminder for next occurrence
+    NotificationManager.shared.scheduleRecurringReminder(
+        for: transaction,
+        on: nextDate
+    )
+}
+```
+
+## CSV Import Implementation
+
+### 1. CSV Import Flow
+Reference [CSVImportManager.swift](mdc:payra/CSVImportManager.swift) for the complete implementation:
+
+```swift
+struct CSVImportView: View {
+    @StateObject private var importManager = CSVImportManager()
+    @State private var showingFilePicker = false
+    @State private var showingPreview = false
+    
+    var body: some View {
+        VStack(spacing: .payraSpacingLG) {
+            PayraCard {
+                VStack(spacing: .payraSpacingMD) {
+                    Image(systemName: "doc.text")
+                        .font(.system(size: 48))
+                        .foregroundColor(.payraPrimary)
+                    
+                    Text("Import Bank Statement")
+                        .font(.payraHeadlineMedium)
+                    
+                    Text("Upload a CSV file from your bank to import transactions automatically")
+                        .font(.payraBodyMedium)
+                        .foregroundColor(.payraTextSecondary)
+                        .multilineTextAlignment(.center)
+                }
+            }
+            
+            PayraButton("Select CSV File") {
+                showingFilePicker = true
+            }
+        }
+        .padding()
+        .fileImporter(
+            isPresented: $showingFilePicker,
+            allowedContentTypes: [.commaSeparatedText],
+            allowsMultipleSelection: false
+        ) { result in
+            switch result {
+            case .success(let urls):
+                if let url = urls.first {
+                    importManager.importCSV(from: url) { success in
+                        if success {
+                            showingPreview = true
+                        }
+                    }
+                }
+            case .failure(let error):
+                print("File import error: \(error)")
+            }
+        }
+        .sheet(isPresented: $showingPreview) {
+            CSVPreviewView(importManager: importManager)
+        }
+    }
+}
+```
+
+### 2. CSV Parsing and Categorization
+```swift
+class CSVImportManager: ObservableObject {
+    @Published var parsedTransactions: [CSVTransaction] = []
+    @Published var isProcessing = false
+    
+    func importCSV(from url: URL, completion: @escaping (Bool) -> Void) {
+        isProcessing = true
+        
+        DispatchQueue.global(qos: .userInitiated).async {
+            do {
+                let content = try String(contentsOf: url)
+                let rows = content.components(separatedBy: .newlines)
+                
+                let transactions = self.parseCSVRows(rows)
+                
+                DispatchQueue.main.async {
+                    self.parsedTransactions = transactions
+                    self.isProcessing = false
+                    completion(true)
+                }
+            } catch {
+                DispatchQueue.main.async {
+                    self.isProcessing = false
+                    completion(false)
+                }
+            }
+        }
+    }
+    
+    private func parseCSVRows(_ rows: [String]) -> [CSVTransaction] {
+        var transactions: [CSVTransaction] = []
+        
+        for (index, row) in rows.enumerated() {
+            guard index > 0 else { continue } // Skip header
+            
+            let columns = row.components(separatedBy: ",")
+            guard columns.count >= 3 else { continue }
+            
+            let dateString = columns[0].trimmingCharacters(in: .whitespaces)
+            let description = columns[1].trimmingCharacters(in: .whitespaces)
+            let amountString = columns[2].trimmingCharacters(in: .whitespaces)
+            
+            guard let date = parseDate(dateString),
+                  let amount = Double(amountString.replacingOccurrences(of: "$", with: "")) else {
+                continue
+            }
+            
+            let suggestedCategory = suggestCategory(for: description)
+            
+            let transaction = CSVTransaction(
+                date: date,
+                description: description,
+                amount: amount,
+                suggestedCategory: suggestedCategory
+            )
+            
+            transactions.append(transaction)
+        }
+        
+        return transactions
+    }
+    
+    private func suggestCategory(for description: String) -> Category? {
+        let lowercased = description.lowercased()
+        
+        // Simple keyword-based categorization
+        if lowercased.contains("grocery") || lowercased.contains("food") || lowercased.contains("restaurant") {
+            return findCategory(name: "Food")
+        } else if lowercased.contains("gas") || lowercased.contains("fuel") || lowercased.contains("uber") {
+            return findCategory(name: "Transport")
+        } else if lowercased.contains("amazon") || lowercased.contains("walmart") || lowercased.contains("target") {
+            return findCategory(name: "Shopping")
+        }
+        
+        return nil
+    }
+}
+```
+
+## Goals Implementation
+
+### 1. Goal Creation and Tracking
+Reference [GoalsView.swift](mdc:payra/GoalsView.swift) and [AddGoalView.swift](mdc:payra/AddGoalView.swift):
+
+```swift
+struct AddGoalView: View {
+    @Environment(\.dismiss) private var dismiss
+    @State private var name = ""
+    @State private var targetAmount = ""
+    @State private var deadline: Date = Date().addingTimeInterval(30 * 24 * 60 * 60) // 30 days
+    @State private var hasDeadline = true
+    
+    private let coreDataManager = CoreDataManager.shared
+    
+    var body: some View {
+        NavigationView {
+            Form {
+                Section("Goal Details") {
+                    TextField("Goal Name", text: $name)
+                    
+                    TextField("Target Amount", text: $targetAmount)
+                        .keyboardType(.decimalPad)
+                }
+                
+                Section("Timeline") {
+                    Toggle("Set Deadline", isOn: $hasDeadline)
+                    
+                    if hasDeadline {
+                        DatePicker("Deadline", selection: $deadline, displayedComponents: .date)
+                    }
+                }
+            }
+            .navigationTitle("Create Goal")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .navigationBarLeading) {
+                    Button("Cancel") {
+                        dismiss()
+                    }
+                }
+                
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Button("Create") {
+                        createGoal()
+                    }
+                    .disabled(!isFormValid)
+                }
+            }
+        }
+    }
+    
+    private var isFormValid: Bool {
+        !name.isEmpty && !targetAmount.isEmpty && Double(targetAmount) != nil
+    }
+    
+    private func createGoal() {
+        guard let targetValue = Double(targetAmount) else { return }
+        
+        let goal = coreDataManager.createGoal(
+            name: name,
+            targetAmount: targetValue,
+            deadline: hasDeadline ? deadline : nil
+        )
+        
+        dismiss()
+    }
+}
+```
+
+### 2. Goal Progress Tracking
+```swift
+struct GoalProgressView: View {
+    let goal: Goal
+    
+    private var progressPercentage: Double {
+        guard goal.targetAmount > 0 else { return 0 }
+        return min(goal.currentAmount / goal.targetAmount, 1.0)
+    }
+    
+    private var remainingAmount: Double {
+        max(goal.targetAmount - goal.currentAmount, 0)
+    }
+    
+    var body: some View {
+        PayraCard {
+            VStack(alignment: .leading, spacing: .payraSpacingMD) {
+                HStack {
+                    Text(goal.name)
+                        .font(.payraBodyLarge)
+                        .fontWeight(.semibold)
+                    
+                    Spacer()
+                    
+                    if goal.isCompleted {
+                        Image(systemName: "checkmark.circle.fill")
+                            .foregroundColor(.green)
+                    }
+                }
+                
+                ProgressView(value: progressPercentage)
+                    .progressViewStyle(LinearProgressViewStyle(tint: .payraPrimary))
+                
+                HStack {
+                    Text("$\(goal.currentAmount, specifier: "%.2f")")
+                        .font(.payraBodyMedium)
+                        .foregroundColor(.payraTextSecondary)
+                    
+                    Text("of $\(goal.targetAmount, specifier: "%.2f")")
+                        .font(.payraBodyMedium)
+                        .foregroundColor(.payraTextSecondary)
+                    
+                    Spacer()
+                    
+                    if !goal.isCompleted {
+                        Text("$\(remainingAmount, specifier: "%.2f") left")
+                            .font(.payraCaption)
+                            .foregroundColor(.payraTextSecondary)
+                    }
+                }
+                
+                if let deadline = goal.deadline {
+                    HStack {
+                        Image(systemName: "calendar")
+                            .foregroundColor(.payraIconSecondary)
+                        
+                        Text("Due \(deadline, style: .date)")
+                            .font(.payraCaption)
+                            .foregroundColor(.payraTextSecondary)
+                    }
+                }
+            }
+        }
+    }
+}
+```
+
+## Notifications Implementation
+
+### 1. Notification Setup
+Reference [NotificationManager.swift](mdc:payra/NotificationManager.swift):
+
+```swift
+class NotificationManager: ObservableObject {
+    static let shared = NotificationManager()
+    
+    func requestPermission() {
+        UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .badge, .sound]) { granted, error in
+            if granted {
+                print("Notification permission granted")
+            } else if let error = error {
+                print("Notification permission error: \(error)")
+            }
+        }
+    }
+    
+    func scheduleRecurringReminder(for transaction: Transaction, on date: Date) {
+        let content = UNMutableNotificationContent()
+        content.title = "Recurring Payment Due"
+        content.body = "\(transaction.merchant ?? "Payment") - $\(transaction.amount, specifier: "%.2f")"
+        content.sound = .default
+        
+        let trigger = UNCalendarNotificationTrigger(
+            dateMatching: Calendar.current.dateComponents([.year, .month, .day], from: date),
+            repeats: false
+        )
+        
+        let request = UNNotificationRequest(
+            identifier: "recurring-\(transaction.id?.uuidString ?? "")",
+            content: content,
+            trigger: trigger
+        )
+        
+        UNUserNotificationCenter.current().add(request)
+    }
+    
+    func scheduleBudgetAlert(for category: Category, currentSpending: Double) {
+        guard let budgetLimit = category.budgetLimit, budgetLimit > 0 else { return }
+        
+        let percentage = currentSpending / budgetLimit
+        
+        if percentage >= 0.8 && percentage < 1.0 {
+            let content = UNMutableNotificationContent()
+            content.title = "Budget Alert"
+            content.body = "You've spent \(Int(percentage * 100))% of your \(category.name ?? "") budget"
+            content.sound = .default
+            
+            let trigger = UNTimeIntervalNotificationTrigger(timeInterval: 1, repeats: false)
+            let request = UNNotificationRequest(
+                identifier: "budget-\(category.id?.uuidString ?? "")",
+                content: content,
+                trigger: trigger
+            )
+            
+            UNUserNotificationCenter.current().add(request)
+        }
+    }
+}
+```
+
+### 2. Goal Reminders
+```swift
+func scheduleGoalReminder(for goal: Goal) {
+    guard let deadline = goal.deadline else { return }
+    
+    // Remind 7 days before deadline
+    let reminderDate = Calendar.current.date(byAdding: .day, value: -7, to: deadline) ?? deadline
+    
+    let content = UNMutableNotificationContent()
+    content.title = "Goal Deadline Approaching"
+    content.body = "\(goal.name ?? "Your goal") is due in 7 days. You have $\(goal.targetAmount - goal.currentAmount, specifier: "%.2f") left to save."
+    content.sound = .default
+    
+    let trigger = UNCalendarNotificationTrigger(
+        dateMatching: Calendar.current.dateComponents([.year, .month, .day], from: reminderDate),
+        repeats: false
+    )
+    
+    let request = UNNotificationRequest(
+        identifier: "goal-\(goal.id?.uuidString ?? "")",
+        content: content,
+        trigger: trigger
+    )
+    
+    UNUserNotificationCenter.current().add(request)
+}
+```

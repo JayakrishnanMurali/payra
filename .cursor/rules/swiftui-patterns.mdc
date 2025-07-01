@@ -1,0 +1,308 @@
+---
+description:
+globs:
+alwaysApply: false
+---
+# SwiftUI Development Patterns for Payra
+
+## View Structure & Organization
+
+### 1. View Hierarchy Pattern
+Follow this structure for all feature views:
+```swift
+struct FeatureView: View {
+    // MARK: - Properties
+    @StateObject private var viewModel = FeatureViewModel()
+    @Environment(\.managedObjectContext) private var context
+    
+    // MARK: - Body
+    var body: some View {
+        NavigationView {
+            VStack {
+                // Content
+            }
+            .navigationTitle("Feature")
+            .navigationBarTitleDisplayMode(.large)
+        }
+    }
+}
+```
+
+### 2. State Management Patterns
+
+#### For View Models
+```swift
+class FeatureViewModel: ObservableObject {
+    @Published var items: [Item] = []
+    @Published var isLoading = false
+    @Published var errorMessage: String?
+    
+    private let coreDataManager = CoreDataManager.shared
+    
+    func loadData() {
+        // Implementation
+    }
+}
+```
+
+#### For Data Binding
+```swift
+// Use @Binding for child views that modify parent state
+struct ChildView: View {
+    @Binding var value: String
+    
+    var body: some View {
+        TextField("Enter value", text: $value)
+    }
+}
+```
+
+### 3. Navigation Patterns
+
+#### Tab Navigation
+Reference [MainTabView.swift](mdc:payra/MainTabView.swift) for the main tab structure:
+- Dashboard (Home)
+- Transactions
+- Goals
+- Settings
+
+#### Sheet Presentations
+```swift
+@State private var showingAddSheet = false
+
+var body: some View {
+    Button("Add") {
+        showingAddSheet = true
+    }
+    .sheet(isPresented: $showingAddSheet) {
+        AddItemView()
+    }
+}
+```
+
+#### Navigation Links
+```swift
+NavigationLink(destination: DetailView(item: item)) {
+    ItemRowView(item: item)
+}
+```
+
+## Design System Integration
+
+### 1. Using Design System Components
+Reference [DesignSystem.swift](mdc:payra/DesignSystem.swift) for all UI components:
+
+```swift
+// Buttons
+PayraButton("Save", style: .primary) {
+    saveAction()
+}
+
+// Cards
+PayraCard {
+    VStack {
+        Text("Card Content")
+    }
+}
+
+// Search
+PayraSearchBar(text: $searchText, placeholder: "Search...")
+```
+
+### 2. Color Usage
+```swift
+// Background colors
+.background(Color.payraBackground)
+
+// Text colors
+.foregroundColor(.payraTextPrimary)
+.foregroundColor(.payraTextSecondary)
+
+// Accent colors
+.foregroundColor(.payraPrimary)
+.foregroundColor(.payraAccent)
+```
+
+### 3. Typography
+```swift
+Text("Title")
+    .font(.payraHeadlineLarge)
+
+Text("Body text")
+    .font(.payraBodyMedium)
+
+Text("Caption")
+    .font(.payraCaption)
+```
+
+### 4. Spacing & Layout
+```swift
+VStack(spacing: .payraSpacingMD) {
+    // Content
+}
+.padding(.payraSpacingLG)
+```
+
+## Data Integration Patterns
+
+### 1. Core Data Integration
+Always use [CoreDataManager.swift](mdc:payra/CoreDataManager.swift) for data operations:
+
+```swift
+// In ViewModel
+func createTransaction(amount: Double, merchant: String) {
+    let transaction = coreDataManager.createTransaction(
+        amount: amount,
+        date: Date(),
+        merchant: merchant,
+        category: selectedCategory,
+        notes: notes,
+        type: .expense
+    )
+    loadTransactions()
+}
+```
+
+### 2. Fetching Data
+```swift
+// In ViewModel
+func loadTransactions() {
+    items = coreDataManager.fetchTransactions(for: .thisMonth)
+}
+```
+
+### 3. Real-time Updates
+```swift
+// Use @FetchRequest for automatic updates
+@FetchRequest(
+    sortDescriptors: [NSSortDescriptor(keyPath: \Transaction.date, ascending: false)],
+    predicate: NSPredicate(format: "date >= %@", startOfMonth as NSDate)
+) private var transactions: FetchedResults<Transaction>
+```
+
+## Form Handling Patterns
+
+### 1. Input Validation
+```swift
+@State private var amount = ""
+@State private var merchant = ""
+@State private var showingError = false
+
+private var isFormValid: Bool {
+    !amount.isEmpty && !merchant.isEmpty && Double(amount) != nil
+}
+
+private func validateAndSave() {
+    guard isFormValid else {
+        showingError = true
+        return
+    }
+    // Save logic
+}
+```
+
+### 2. Form Layout
+```swift
+Form {
+    Section("Transaction Details") {
+        TextField("Amount", text: $amount)
+            .keyboardType(.decimalPad)
+        
+        TextField("Merchant", text: $merchant)
+        
+        Picker("Category", selection: $selectedCategory) {
+            ForEach(categories) { category in
+                Text(category.name).tag(category)
+            }
+        }
+    }
+}
+```
+
+## Error Handling Patterns
+
+### 1. User-Friendly Errors
+```swift
+@State private var errorMessage: String?
+
+.alert("Error", isPresented: $showingError) {
+    Button("OK") { }
+} message: {
+    Text(errorMessage ?? "An error occurred")
+}
+```
+
+### 2. Loading States
+```swift
+@State private var isLoading = false
+
+if isLoading {
+    ProgressView("Loading...")
+} else {
+    // Content
+}
+```
+
+## Performance Optimization
+
+### 1. Lazy Loading
+```swift
+LazyVStack {
+    ForEach(transactions) { transaction in
+        TransactionRowView(transaction: transaction)
+    }
+}
+```
+
+### 2. Conditional Rendering
+```swift
+if !transactions.isEmpty {
+    TransactionListView(transactions: transactions)
+} else {
+    EmptyStateView()
+}
+```
+
+### 3. Efficient Lists
+```swift
+List(transactions) { transaction in
+    TransactionRowView(transaction: transaction)
+}
+.listStyle(PlainListStyle())
+```
+
+## Accessibility
+
+### 1. VoiceOver Support
+```swift
+Text("Amount: $\(amount)")
+    .accessibilityLabel("Transaction amount")
+    .accessibilityValue("$\(amount)")
+```
+
+### 2. Dynamic Type
+```swift
+Text("Title")
+    .font(.payraHeadlineLarge)
+    .dynamicTypeSize(.large ... .accessibility3)
+```
+
+## Testing Patterns
+
+### 1. Preview Support
+```swift
+struct FeatureView_Previews: PreviewProvider {
+    static var previews: some View {
+        FeatureView()
+            .environment(\.managedObjectContext, CoreDataManager.shared.context)
+    }
+}
+```
+
+### 2. Mock Data
+```swift
+extension Transaction {
+    static let mock = Transaction(context: CoreDataManager.shared.context)
+    // Set mock properties
+}
+```
